@@ -1,0 +1,7 @@
+agno
+pandas
+openpyxl
+python-docx
+PyMuPDF
+fpdf2
+openai
