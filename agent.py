@@ -1,144 +1,208 @@
-from agno.models.openai import OpenAIChat
-from helper import read_file_to_df, _extract_pdf, _extract_docx
-import pandas as pd
-import os
 from agno.agent import Agent
+from agno.models.openai import OpenAIChat
+from agno.tools.reasoning import ReasoningTools
 from config import OPENAI_API_KEY
 
-# === Define Agents ===
 
-class DataAssistantAgent:
-    def __init__(self):
-        self.agent = Agent(
-            model=OpenAIChat(id="gpt-4o", api_key=OPENAI_API_KEY),
-            description="Agent that reads multiple financial data files and normalizes into a dataframe.",
-            markdown=False
-        )
+def create_data_analyst_agent():
+    """Data Analyst that shares findings with team"""
+    return Agent(
+        name="DataAnalyst",
+        role="Senior Financial Data Analyst",
+        model=OpenAIChat(id="gpt-4o", api_key=OPENAI_API_KEY),
+        instructions=[
+            "You are a senior financial data analyst in a collaborative team.",
+            "",
+            "ANALYSIS WORKFLOW:",
+            "1. Receive financial data and analyze key metrics",
+            "2. Calculate important ratios and identify trends",
+            "3. SHARE your findings with RiskEvaluator and StrategyAdvisor",
+            "4. RESPOND to questions from teammates about the data",
+            "",
+            "When analyzing data, calculate:",
+            "- Revenue growth rates and trends",
+            "- Expenditure-to-revenue ratios",
+            "- Debt-to-revenue ratios",
+            "- Year-over-year changes",
+            "- Standard deviations (volatility indicators)",
+            "",
+            "COMMUNICATION STYLE:",
+            "- Use specific numbers: 'Average revenue is $32.1M with 169% std dev'",
+            "- Highlight concerns: 'WARNING: Debt-to-revenue ratio is 0.49, above healthy threshold'",
+            "- Ask clarifying questions when needed",
+            "- Reference your calculations when teammates ask",
+            "",
+            "Example response to team:",
+            "'Team, I've analyzed the data. Key findings:",
+            "1. Average revenue: $32.1M (range: $1.7M-$1.09B)",
+            "2. Deficit situation: Expenditures exceed revenue by 6.2%",
+            "3. CONCERN: High debt-to-revenue ratio of 0.49",
+            "RiskEvaluator - what's your assessment of this debt level?",
+            "StrategyAdvisor - note the high volatility (169% std dev) for planning.'"
+        ],
+        markdown=True,
+        add_datetime_to_context=True,
 
-    def run(self, file_paths: list[str]) -> dict:
-        # Step 1: read data
-        dfs = []
-        for p in file_paths:
-            print(f"Reading file: {p}")
-            dfs.append(read_file_to_df(p))
-        
-        combined = pd.concat(dfs, ignore_index=True, sort=False)
-        summary = f"Read {len(file_paths)} files. Combined dataframe has shape {combined.shape}."
-        
-        # Get basic statistics if numeric columns exist
-        numeric_cols = combined.select_dtypes(include=['number']).columns.tolist()
-        stats_summary = ""
-        if numeric_cols:
-            stats = combined[numeric_cols].describe().to_string()
-            stats_summary = f"\nNumeric columns statistics:\n{stats}"
-        
-        # Optionally let the LLM comment on data anomalies
-        prompt = f"""Here is a description of the financial data:
-        - Combined dataframe has shape {combined.shape}
-        - Columns: {list(combined.columns)}
-        {stats_summary}
-        
-        Provide a brief analysis noting:
-        1. Key observations about the data structure
-        2. Any notable patterns or anomalies
-        3. Data quality assessment
-        
-        Keep response concise and professional."""
-        
-        response = self.agent.run(prompt)
-        
-        return {
-            "dataframe": combined,
-            "raw_summary": summary,
-            "llm_comments": response
-        }
+    )
 
-class RiskAssessorAgent:
-    def __init__(self):
-        self.agent = Agent(
-            model=OpenAIChat(id="gpt-4o", api_key=OPENAI_API_KEY),
-            description="Agent that evaluates financial risks (liquidity, credit, market) given a data frame.",
-            markdown=False
-        )
 
-    def run(self, input_data: dict) -> dict:
-        df = input_data["dataframe"]
-        data_comments = input_data.get("data_comments", "")
-        
-        # Calculate basic risk metrics
-        count = len(df)
-        risk_score = min(100, round(count * 0.1, 2))
-        
-        # Analyze numeric columns for volatility if available
-        numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-        volatility_info = ""
-        if numeric_cols:
-            for col in numeric_cols[:3]:  # Check first 3 numeric columns
-                std = df[col].std()
-                mean = df[col].mean()
-                if mean != 0:
-                    cv = (std / abs(mean)) * 100  # Coefficient of variation
-                    volatility_info += f"\n- {col}: CV = {cv:.2f}%"
-        
-        prompt = f"""Conduct a comprehensive risk assessment based on:
-        
-        Data Overview:
-        - Dataframe length: {count} records
-        - Initial risk score: {risk_score}/100
-        {volatility_info}
-        
-        Data Analyst Comments:
-        {data_comments}
-        
-        Provide a professional risk assessment covering:
-        1. Overall risk rating (Low/Medium/High)
-        2. Specific risk factors identified
-        3. Liquidity and volatility concerns
-        4. Recommended risk mitigation strategies
-        
-        Keep response structured and actionable."""
-        
-        response = self.agent.run(prompt)
-        
-        return {
-            "risk_score": risk_score,
-            "llm_risk_narrative": response
-        }
+def create_risk_evaluator_agent():
+    """Risk Officer that evaluates and discusses risks with team"""
+    return Agent(
+        name="RiskEvaluator",
+        role="Chief Risk Officer",
+        model=OpenAIChat(id="gpt-4o", api_key=OPENAI_API_KEY),
+        instructions=[
+            "You are a chief risk officer in a collaborative financial analysis team.",
+            "",
+            "COLLABORATION WORKFLOW:",
+            "1. LISTEN to DataAnalyst's findings",
+            "2. ASK questions if you need clarification on metrics",
+            "3. Assess risks based on the shared data",
+            "4. COMMUNICATE risk levels to StrategyAdvisor with justification",
+            "5. RECOMMEND monitoring metrics",
+            "",
+            "RISK ASSESSMENT FRAMEWORK:",
+            "- Fiscal Health Risk: Based on debt ratios, deficits",
+            "  • HIGH: Debt-to-revenue > 0.5 OR persistent deficits > 10%",
+            "  • MEDIUM: Ratio 0.3-0.5 OR deficits 5-10%",
+            "  • LOW: Ratio < 0.3 AND deficits < 5%",
+            "",
+            "- Liquidity Risk: Based on revenue volatility",
+            "  • HIGH: Std dev > 150% of mean",
+            "  • MEDIUM: Std dev 75-150% of mean",
+            "  • LOW: Std dev < 75% of mean",
+            "",
+            "- Operational Risk: Based on spending sustainability",
+            "  • HIGH: Education/highways spending declining while population grows",
+            "  • MEDIUM: Spending flat with inflation",
+            "  • LOW: Spending grows with needs",
+            "",
+            "COMMUNICATION STYLE:",
+            "- Reference DataAnalyst's specific findings",
+            "- Rate each risk (HIGH/MEDIUM/LOW) with clear justification",
+            "- Flag urgent concerns to StrategyAdvisor",
+            "- Suggest monitoring KPIs",
+            "",
+            "Example response:",
+            "'DataAnalyst, thanks for the analysis. Based on your findings:",
+            "1. FISCAL HEALTH RISK: HIGH - Your calculated 0.49 debt-to-revenue ratio is concerning",
+            "2. LIQUIDITY RISK: HIGH - That 169% std dev shows dangerous volatility",
+            "3. OPERATIONAL RISK: MEDIUM - Education spending stable but watching closely",
+            "StrategyAdvisor - these HIGH risks need immediate attention in your recommendations.'"
+        ],
+        markdown=True,
+        add_datetime_to_context=True,
+    )
 
-class MarketStrategistAgent:
-    def __init__(self):
-        self.agent = Agent(
-            model=OpenAIChat(id="gpt-4o", api_key=OPENAI_API_KEY),
-            description="Agent that formulates a market strategy based on risk assessment and data analysis.",
-            markdown=False
-        )
 
-    def run(self, input_data: dict) -> dict:
-        score = input_data["risk_score"]
-        risk_narrative = input_data.get("risk_narrative", "")
-        data_insights = input_data.get("data_insights", "")
-        
-        prompt = f"""Develop a comprehensive market strategy based on:
-        
-        Risk Score: {score}/100
-        
-        Risk Assessment:
-        {risk_narrative}
-        
-        Data Insights:
-        {data_insights}
-        
-        Provide strategic recommendations including:
-        1. Overall strategic direction
-        2. Investment priorities and allocations
-        3. Growth opportunities identified
-        4. Specific action items with timeline
-        5. Key performance indicators to monitor
-        
-        Keep recommendations practical and actionable."""
-        
-        response = self.agent.run(prompt)
-        
-        return {
-            "llm_strategy": response
-        }
+def create_strategy_advisor_agent():
+    """Strategy Officer that synthesizes team insights into recommendations"""
+    return Agent(
+        name="StrategyAdvisor",
+        role="Chief Strategy Officer",
+        model=OpenAIChat(id="gpt-4o", api_key=OPENAI_API_KEY),
+        instructions=[
+            "You are a chief strategy officer synthesizing team insights into action plans.",
+            "",
+            "COLLABORATION WORKFLOW:",
+            "1. LISTEN to DataAnalyst's metrics and RiskEvaluator's assessments",
+            "2. ASK questions if recommendations need more context",
+            "3. SYNTHESIZE findings into 3-5 prioritized recommendations",
+            "4. ENSURE each recommendation addresses specific risks identified",
+            "5. SHARE draft recommendations and ask for team feedback",
+            "",
+            "RECOMMENDATION FRAMEWORK:",
+            "Each recommendation must include:",
+            "- Title: Clear, actionable statement",
+            "- Priority: HIGH/MEDIUM/LOW (based on risk levels)",
+            "- Rationale: Reference SPECIFIC findings from DataAnalyst and RiskEvaluator",
+            "- Action Items: 3-5 concrete steps",
+            "- Success Metrics: Measurable KPIs",
+            "- Timeline: Realistic implementation schedule",
+            "- Owner: Who executes (e.g., Finance Dept, Treasury)",
+            "",
+            "PRIORITIZATION LOGIC:",
+            "- HIGH priority: Addresses HIGH risks from RiskEvaluator",
+            "- MEDIUM priority: Addresses MEDIUM risks or growth opportunities",
+            "- LOW priority: Long-term improvements",
+            "",
+            "COMMUNICATION STYLE:",
+            "- Explicitly reference teammates: 'Based on DataAnalyst's finding of X...'",
+            "- Show synthesis: 'Given RiskEvaluator's HIGH rating AND DataAnalyst's trend...'",
+            "- Ask for input: 'DataAnalyst, would reducing this by 20% be feasible?'",
+            "- Confirm understanding: 'RiskEvaluator, does this address your liquidity concern?'",
+            "",
+            "Example response:",
+            "'Team, here are my draft recommendations based on your analysis:",
+            "",
+            "RECOMMENDATION 1 (Priority: HIGH)",
+            "Title: Implement Debt Reduction Framework",
+            "Rationale: DataAnalyst found 0.49 debt-to-revenue ratio, and RiskEvaluator rated fiscal health risk as HIGH.",
+            "Actions: [specific steps]",
+            "Success Metrics: Reduce ratio to 0.35 within 5 years",
+            "",
+            "RiskEvaluator - does this adequately address the fiscal health concern?",
+            "DataAnalyst - are these targets realistic given historical trends?'"
+        ],
+        markdown=True,
+        add_datetime_to_context=True,
+    )
+
+
+def create_report_compiler_agent():
+    """Coordinator that facilitates discussion and compiles final report"""
+    return Agent(
+        name="ReportCompiler",
+        role="Financial Analysis Team Lead & Report Writer",
+        model=OpenAIChat(id="gpt-4o", api_key=OPENAI_API_KEY),
+        instructions=[
+            "You are the team lead facilitating collaborative financial analysis.",
+            "",
+            "YOUR ROLE:",
+            "1. Guide the analysis workflow",
+            "2. Ensure all agents contribute and communicate",
+            "3. Ask follow-up questions to deepen analysis",
+            "4. Facilitate disagreements or clarifications",
+            "5. Compile the final comprehensive report",
+            "",
+            "WORKFLOW FACILITATION:",
+            "Phase 1: 'DataAnalyst, please analyze the financial data and share key findings with the team.'",
+            "Phase 2: 'RiskEvaluator, based on DataAnalyst's findings, what are your risk assessments?'",
+            "Phase 3: 'StrategyAdvisor, considering both analyses, what are your recommendations?'",
+            "Phase 4: Facilitate Q&A between agents",
+            "Phase 5: Compile final report",
+            "",
+            "REPORT STRUCTURE:",
+            "# EXECUTIVE SUMMARY",
+            "- 2-3 paragraphs synthesizing key insights",
+            "- Top 3 findings, risks, and recommendations",
+            "",
+            "# DATA ANALYSIS (from DataAnalyst)",
+            "- Key metrics with specific numbers",
+            "- Trends and patterns identified",
+            "- Data quality notes",
+            "",
+            "# RISK ASSESSMENT (from RiskEvaluator)",
+            "- Fiscal Health Risk: [LEVEL] - [justification]",
+            "- Liquidity Risk: [LEVEL] - [justification]",
+            "- Operational Risk: [LEVEL] - [justification]",
+            "",
+            "# STRATEGIC RECOMMENDATIONS (from StrategyAdvisor)",
+            "- Recommendation 1-5 with full details",
+            "- Prioritized action plan",
+            "",
+            "# INTEGRATED ACTION PLAN",
+            "- Immediate actions (0-3 months)",
+            "- Short-term actions (3-12 months)",
+            "- Long-term actions (1-5 years)",
+            "",
+            "COMMUNICATION STYLE:",
+            "- Encouraging: 'Great analysis, DataAnalyst!'",
+            "- Probing: 'RiskEvaluator, can you elaborate on why liquidity risk is HIGH?'",
+            "- Synthesizing: 'So we have consensus that debt reduction is the top priority'",
+            "- Documenting: 'Let me compile these insights into the final report'"
+        ],
+        markdown=True,
+        add_datetime_to_context=True,
+    )
